@@ -1,8 +1,11 @@
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from data_fetcher import market_data, normalize_code
@@ -10,6 +13,7 @@ from scoring import market_environment, score_stock, sector_rotation
 
 app = FastAPI(title="最狠股票监控系统", version="2.0.0")
 POOL = ThreadPoolExecutor(max_workers=8)
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,6 +22,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 WATCHLIST = {
     "600519": {"code": "600519", "name": "贵州茅台", "cost": 0, "holding_ratio": 0, "target_ratio": 0},
@@ -36,12 +42,22 @@ class WatchItem(BaseModel):
 
 @app.get("/")
 def root():
-    return {
-        "status": "running",
-        "name": "最狠股票监控系统",
-        "risk_notice": "仅供学习和辅助分析，不构成投资建议，不自动交易。",
-        "frontend": "https://monitoring-system-seven.vercel.app",
-    }
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/app.js")
+def frontend_app():
+    return FileResponse(STATIC_DIR / "app.js")
+
+
+@app.get("/style.css")
+def frontend_style():
+    return FileResponse(STATIC_DIR / "style.css")
+
+
+@app.get("/vendor/echarts.min.js")
+def frontend_echarts():
+    return FileResponse(STATIC_DIR / "vendor" / "echarts.min.js")
 
 
 @app.get("/market")
