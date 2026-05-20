@@ -1,7 +1,7 @@
 const API_BASE =
   window.STOCK_API_BASE ||
   localStorage.getItem("STOCK_API_BASE") ||
-  "http://127.0.0.1:8000";
+  "https://monitoring-system-v5zc.onrender.com";
 
 let chart;
 
