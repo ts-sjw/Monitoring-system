@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI股票分析系统</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <header>AI股票分析系统</header>
+
+    <main>
+      <section class="panel">
+        <h2>自选股分析</h2>
+        <div class="form-row">
+          <input id="codeInput" placeholder="输入股票代码，例如 000001" />
+          <button onclick="analyze()">开始分析</button>
+        </div>
+        <p class="notice">仅供学习和辅助分析，不构成投资建议，不自动交易。</p>
+      </section>
+
+      <section id="result" class="card empty">请输入股票代码开始分析</section>
+      <section class="card">
+        <h2>K线与成交量</h2>
+        <div id="chart" class="chart"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
