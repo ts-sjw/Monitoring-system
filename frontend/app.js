@@ -18,6 +18,59 @@ const api = {
   remove: (code) => fetch(`${api.base}/api/watchlist/${code}`, { method: "DELETE" }).then((r) => r.json()),
 };
 
+const DEFAULT_DASHBOARD = {
+  watchlist: [],
+  indexes: [
+    { code: "sh000001", name: "上证指数", price: 0, pct: 0, amount: 0, valid: false },
+    { code: "sz399001", name: "深成指", price: 0, pct: 0, amount: 0, valid: false },
+    { code: "sz399006", name: "创业板指", price: 0, pct: 0, amount: 0, valid: false },
+    { code: "sh000688", name: "科创50", price: 0, pct: 0, amount: 0, valid: false },
+    { code: "sh000300", name: "沪深300", price: 0, pct: 0, amount: 0, valid: false },
+    { code: "sh000905", name: "中证500", price: 0, pct: 0, amount: 0, valid: false },
+  ],
+  environment: { state: "加载中", score: 50, summary: "正在连接行情服务器。" },
+  rotation: {
+    score: 50,
+    main: [
+      { name: "人工智能", pct: 0, amount: 0 },
+      { name: "半导体", pct: 0, amount: 0 },
+      { name: "机器人", pct: 0, amount: 0 },
+    ],
+    catch_up: [],
+    fading: [],
+  },
+  hot_money: {
+    valid: true,
+    source: "等待行情服务器",
+    summary: { cycle: "加载中", limit_up_count: 0, limit_down_count: 0, break_rate: 0, limit_height: 0 },
+    scores: { board_risk: 0, relay_risk: 0, leader_strength: 0 },
+    main_industries: [],
+    leaders: [],
+    broken: [],
+    lhb: { valid: false, reason: "等待数据" },
+  },
+  stocks: [
+    {
+      quote: { code: "600519", name: "贵州茅台", price: 0, pct: 0, source: "等待刷新" },
+      holding: { holding_ratio: 0, target_ratio: 0 },
+      analysis: {
+        score: "--",
+        advice: "等待行情",
+        position: "--",
+        state: "加载中",
+        one_liner: "页面已打开，后台正在唤醒行情服务器。",
+        sub_scores: { market: 50, sector: 50, technical: 50, fund: 50, volume_price: 50, news: 50 },
+        trade_plan: {},
+        bullish_reasons: ["行情加载完成后自动刷新。"],
+        risks: ["Render 免费实例冷启动时可能需要十几秒。"],
+        technical: {},
+        volume_price: { explain: "等待行情数据。" },
+      },
+      stock_hot_money: { recommendation: "等待刷新", scores: {}, tags: [] },
+    },
+  ],
+};
+
 const state = {
   dashboard: null,
   selected: null,
@@ -27,6 +80,25 @@ const state = {
   marketTimer: null,
   chartMode: "daily",
 };
+
+function readCachedDashboard() {
+  try {
+    const raw = localStorage.getItem("DASHBOARD_CACHE");
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    return cached?.stocks?.length ? cached : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function saveCachedDashboard(data) {
+  try {
+    localStorage.setItem("DASHBOARD_CACHE", JSON.stringify(data));
+  } catch (error) {
+    console.warn("dashboard cache failed", error);
+  }
+}
 
 function chart(id) {
   if (!state.charts[id]) state.charts[id] = echarts.init(document.getElementById(id));
@@ -119,6 +191,20 @@ function renderWatch(stocks) {
       selectStock(row.dataset.code);
     });
   });
+}
+
+function renderIdleAdvice() {
+  document.getElementById("stockTitle").textContent = "选择股票";
+  document.getElementById("dataSource").textContent = "页面已就绪";
+  document.getElementById("adviceCard").innerHTML = `
+    <div class="message"><span class="tag">提示</span>点击左侧股票后加载完整K线、买卖点、支撑位和压力位。</div>
+    <div class="message">首页先显示快速行情，避免 Render 免费实例冷启动时整页卡住。</div>
+  `;
+  document.getElementById("scoreGrid").innerHTML = "";
+  chart("kChart").setOption({ title: { text: "选择股票查看K线", left: "center", top: "center", textStyle: { color: "#92a39b", fontSize: 16 } } }, true);
+  lineChart("macdChart", [], [["MACD", []]]);
+  lineChart("rsiChart", [], [["RSI", []]]);
+  lineChart("kdjChart", [], [["KDJ", []]]);
 }
 
 function renderAdvice(data) {
@@ -361,6 +447,8 @@ function renderHotMoney(hotMoney, stockHot, loadingText) {
 
 async function selectStock(code) {
   state.selected = code;
+  document.getElementById("dataSource").textContent = "正在加载完整分析...";
+  document.getElementById("adviceCard").innerHTML = `<div class="message"><span class="tag">加载中</span>正在获取K线、支撑压力和买卖点。</div>`;
   state.stock = await api.stock(code);
   renderWatch(state.dashboard.stocks);
   renderAdvice(state.stock);
@@ -395,12 +483,20 @@ async function removeStock(code) {
 }
 
 async function loadDashboard() {
+  if (!state.dashboard) {
+    state.dashboard = readCachedDashboard() || DEFAULT_DASHBOARD;
+    renderMarket(state.dashboard);
+    renderWatch(state.dashboard.stocks);
+    renderBottom(state.dashboard);
+    renderIdleAdvice();
+  }
+
   state.dashboard = await api.dashboard();
+  saveCachedDashboard(state.dashboard);
   renderMarket(state.dashboard);
   renderWatch(state.dashboard.stocks);
   renderBottom(state.dashboard);
-  const first = state.dashboard.stocks[0]?.quote?.code;
-  if (first) await selectStock(state.selected || first);
+  renderIdleAdvice();
   startPriceRefresh();
   startMarketRefresh();
 }
@@ -435,8 +531,7 @@ async function refreshLatestPrices() {
 
 function startPriceRefresh() {
   if (state.priceTimer) clearInterval(state.priceTimer);
-  refreshLatestPrices();
-  state.priceTimer = setInterval(refreshLatestPrices, 1000);
+  state.priceTimer = setInterval(refreshLatestPrices, 5000);
 }
 
 async function refreshMarketOnly() {
@@ -450,7 +545,7 @@ async function refreshMarketOnly() {
 
 function startMarketRefresh() {
   if (state.marketTimer) clearInterval(state.marketTimer);
-  state.marketTimer = setInterval(refreshMarketOnly, 3000);
+  state.marketTimer = setInterval(refreshMarketOnly, 15000);
 }
 
 document.getElementById("watchForm").addEventListener("submit", async (event) => {
