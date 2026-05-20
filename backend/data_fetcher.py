@@ -37,16 +37,11 @@ def eastmoney_sec_id(code: str) -> str:
 class MarketData:
     def __init__(self):
         self.ak = None
+        self._ak_loaded = False
         self._spot_cache = {"ts": 0, "df": None}
         self._sector_cache = {"ts": 0, "data": None}
         self._name_cache = {"ts": 0, "map": {}}
         self._kline_cache = {}
-        try:
-            import akshare as ak
-
-            self.ak = ak
-        except Exception:
-            self.ak = None
 
     def _run(self, func, timeout=7):
         future = EXECUTOR.submit(func)
@@ -57,13 +52,27 @@ class MarketData:
         except Exception:
             return None
 
+    def _akshare(self):
+        if self._ak_loaded:
+            return self.ak
+
+        def load():
+            import akshare as ak
+
+            return ak
+
+        self.ak = self._run(load, timeout=5)
+        self._ak_loaded = True
+        return self.ak
+
     def _spot(self):
         now = time.time()
         if self._spot_cache["df"] is not None and now - self._spot_cache["ts"] < 20:
             return self._spot_cache["df"]
-        if not self.ak:
+        ak = self._akshare()
+        if not ak:
             return None
-        df = self._run(lambda: self.ak.stock_zh_a_spot_em(), timeout=3)
+        df = self._run(lambda: ak.stock_zh_a_spot_em(), timeout=2)
         if df is not None and not df.empty:
             self._spot_cache = {"ts": now, "df": df}
             return df
@@ -90,9 +99,10 @@ class MarketData:
         if disk_map:
             self._name_cache = {"ts": now, "map": disk_map}
             return disk_map.get(code)
-        if not self.ak:
+        ak = self._akshare()
+        if not ak:
             return None
-        df = self._run(lambda: self.ak.stock_info_a_code_name(), timeout=8)
+        df = self._run(lambda: ak.stock_info_a_code_name(), timeout=3)
         if df is None or df.empty:
             return None
         name_map = self._name_map_from_df(df)
@@ -217,11 +227,12 @@ class MarketData:
             rows = self._tencent_daily_kline(pure, limit)
             if rows:
                 return rows
-        if self.ak and prefer_live:
+        ak = self._akshare() if prefer_live else None
+        if ak and prefer_live:
             if period == "minute":
-                df = self._run(lambda: self.ak.stock_zh_a_hist_min_em(symbol=pure, period="5", adjust=""), timeout=3)
+                df = self._run(lambda: ak.stock_zh_a_hist_min_em(symbol=pure, period="5", adjust=""), timeout=2)
             else:
-                df = self._run(lambda: self.ak.stock_zh_a_hist(symbol=pure, period="daily", adjust="qfq"), timeout=3)
+                df = self._run(lambda: ak.stock_zh_a_hist(symbol=pure, period="daily", adjust="qfq"), timeout=2)
             if df is not None and not df.empty:
                 return self._clean_kline(df.tail(limit))
         return [] if prefer_live else self._fallback_kline(pure, limit)
@@ -241,7 +252,7 @@ class MarketData:
         try:
             url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
             params = {"param": f"{symbol},day,,,{limit},qfq"}
-            data = requests.get(url, params=params, timeout=4).json().get("data", {}).get(symbol, {})
+            data = requests.get(url, params=params, timeout=2.5).json().get("data", {}).get(symbol, {})
             raw = data.get("qfqday") or data.get("day") or []
             rows = []
             for item in raw[-limit:]:
@@ -275,7 +286,7 @@ class MarketData:
         symbol = self._market_symbol(pure)
         try:
             url = "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
-            data = requests.get(url, params={"code": symbol}, timeout=4).json().get("data", {}).get(symbol, {})
+            data = requests.get(url, params={"code": symbol}, timeout=2.5).json().get("data", {}).get(symbol, {})
             raw = data.get("data", {}).get("data", [])
             rows = []
             last_amount = 0.0
@@ -312,7 +323,8 @@ class MarketData:
         rows = self._sina_index_quotes()
         if rows:
             return rows
-        if self.ak:
+        ak = self._akshare()
+        if ak:
             rows = self._akshare_sina_index_quotes()
             if rows:
                 return rows
@@ -361,7 +373,10 @@ class MarketData:
 
     def _akshare_sina_index_quotes(self):
         try:
-            df = self._run(lambda: self.ak.stock_zh_index_spot_sina(), timeout=8)
+            ak = self._akshare()
+            if not ak:
+                return []
+            df = self._run(lambda: ak.stock_zh_index_spot_sina(), timeout=3)
             if df is None or df.empty:
                 return []
             rows = []
@@ -389,9 +404,10 @@ class MarketData:
         now = time.time()
         if self._sector_cache["data"] is not None and now - self._sector_cache["ts"] < 60:
             return self._sector_cache["data"]
-        if self.ak and prefer_live:
-            industry = self._run(lambda: self.ak.stock_board_industry_name_em().head(60), timeout=2.5)
-            concept = self._run(lambda: self.ak.stock_board_concept_name_em().head(80), timeout=2.5)
+        ak = self._akshare() if prefer_live else None
+        if ak and prefer_live:
+            industry = self._run(lambda: ak.stock_board_industry_name_em().head(60), timeout=2)
+            concept = self._run(lambda: ak.stock_board_concept_name_em().head(80), timeout=2)
             if industry is not None and concept is not None:
                 data = {
                     "industry": self._clean_sector(industry, "行业"),
@@ -404,10 +420,11 @@ class MarketData:
 
     def fund_flow(self, code: str, prefer_live=True):
         pure = normalize_code(code)[-6:]
-        if self.ak and prefer_live:
+        ak = self._akshare() if prefer_live else None
+        if ak and prefer_live:
             df = self._run(
-                lambda: self.ak.stock_individual_fund_flow(stock=pure, market="sh" if pure.startswith("6") else "sz"),
-                timeout=3,
+                lambda: ak.stock_individual_fund_flow(stock=pure, market="sh" if pure.startswith("6") else "sz"),
+                timeout=2,
             )
             if df is not None and not df.empty:
                 row = df.tail(1).iloc[0]

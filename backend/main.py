@@ -1,4 +1,5 @@
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +9,7 @@ from data_fetcher import market_data, normalize_code
 from scoring import market_environment, score_stock, sector_rotation
 
 app = FastAPI(title="最狠股票监控系统", version="2.0.0")
+POOL = ThreadPoolExecutor(max_workers=8)
 
 app.add_middleware(
     CORSMiddleware,
@@ -128,12 +130,18 @@ def get_quotes(codes: Optional[str] = Query(default=None)):
 def get_stock(code: str):
     code = normalize_code(code)[-6:]
     saved = WATCHLIST.get(code, {})
-    quote = (market_data.latest_quotes([code]) or [market_data.quote(code)])[0]
+    quote_future = POOL.submit(lambda: (market_data.latest_quotes([code]) or [market_data.quote(code)])[0])
+    daily_future = POOL.submit(lambda: market_data.kline(code, "daily", 180, prefer_live=True) or market_data.kline(code, "daily", 180, prefer_live=False))
+    minute_future = POOL.submit(lambda: market_data.kline(code, "minute", 260, prefer_live=True))
+    indexes_future = POOL.submit(market_data.indexes)
+    sectors_future = POOL.submit(lambda: market_data.sectors(prefer_live=False))
+
+    quote = quote_future.result()
     quote["name"] = market_data.best_name(code, saved.get("name"), quote.get("name"))
-    daily = market_data.kline(code, "daily", 180, prefer_live=True) or market_data.kline(code, "daily", 180, prefer_live=False)
-    minute = market_data.kline(code, "minute", 260, prefer_live=True)
-    indexes = market_data.indexes()
-    sectors = market_data.sectors(prefer_live=False)
+    daily = daily_future.result()
+    minute = minute_future.result()
+    indexes = indexes_future.result()
+    sectors = sectors_future.result()
     env = market_environment(indexes)
     rotation = sector_rotation(sectors)
     fund = market_data.fund_flow(code, prefer_live=False)
@@ -165,12 +173,7 @@ def dashboard():
     for quote in quotes:
         saved = WATCHLIST.get(quote["code"], {})
         quote["name"] = market_data.best_name(quote["code"], saved.get("name"), quote.get("name"))
-        daily = market_data.kline(quote["code"], "daily", 180, prefer_live=True) or market_data.kline(
-            quote["code"], "daily", 180, prefer_live=False
-        )
-        fund = market_data.fund_flow(quote["code"], prefer_live=False)
-        news = market_data.news(quote["code"], quote["name"])
-        analysis = score_stock(quote, daily, env, rotation, fund, news)
+        analysis = quick_analysis(quote, env, rotation)
         cards.append({"quote": quote, "holding": saved, "analysis": analysis, "stock_hot_money": stock_hot_money_summary(quote["code"], quote, rotation)})
     return {
         "watchlist": list(WATCHLIST.values()),
@@ -217,6 +220,47 @@ def stock_hot_money_summary(code, quote, rotation):
         "scores": {"board_risk": max(15, 50 + pct * 3), "relay_risk": max(20, 55 + pct * 2), "leader_strength": leader_strength},
         "tags": [rotation.get("summary", "主线待定"), recommendation],
         "summary": "基于涨跌幅、主线热度和量价位置的轻量情绪判断。",
+    }
+
+
+def quick_analysis(quote, env, rotation):
+    pct = float(quote.get("pct") or 0)
+    score = max(0, min(100, round(52 + pct * 3 + env.get("score", 50) * 0.15 + rotation.get("score", 50) * 0.12, 1)))
+    if score >= 70:
+        advice, position = "持有", "50%"
+    elif score >= 58:
+        advice, position = "谨慎持有", "30%"
+    elif score >= 45:
+        advice, position = "减仓观察", "10%"
+    else:
+        advice, position = "回避", "0%"
+    return {
+        "score": score,
+        "state": "快速行情",
+        "advice": advice,
+        "position": position,
+        "trade_plan": {
+            "buy_point": "点击个股后加载完整K线买点。",
+            "sell_point": "点击个股后加载压力位与卖点。",
+            "add_point": "等待完整分析。",
+            "reduce_point": "等待完整分析。",
+        },
+        "bullish_reasons": [f"实时涨跌幅 {pct:.2f}%。", f"大盘环境：{env.get('state', '未知')}。"],
+        "risks": ["首页为快速行情卡片，完整建议以右侧个股分析为准。"],
+        "support": None,
+        "pressure": None,
+        "stop_loss": None,
+        "one_liner": f"{quote['name']} 快速评分 {score}，点击后加载完整建议。",
+        "sub_scores": {
+            "market": env.get("score", 50),
+            "sector": rotation.get("score", 50),
+            "technical": 50,
+            "fund": 50,
+            "volume_price": 50,
+            "news": 50,
+        },
+        "technical": {"indicators": [], "level_note": "点击个股后加载完整K线支撑/压力。"},
+        "volume_price": {"state": "快速行情", "score": 50, "explain": "首页仅展示快速行情，完整量价分析在个股详情中生成。"},
     }
 
 
