@@ -3,3 +3,4 @@ uvicorn
 akshare
 pandas
 numpy
+requests
