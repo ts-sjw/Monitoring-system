@@ -1,16 +1,27 @@
 import numpy as np
 import pandas as pd
 
-try:
-    import akshare as ak
-except Exception:
-    ak = None
+ak = None
+
+
+def get_akshare():
+    global ak
+    if ak is not None:
+        return ak
+    try:
+        import akshare as ak_module
+
+        ak = ak_module
+        return ak
+    except Exception:
+        return None
 
 
 def get_stock_daily(code: str):
-    if ak is not None:
+    ak_module = get_akshare()
+    if ak_module is not None:
         try:
-            df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq")
+            df = ak_module.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq")
             df = df.rename(
                 columns={
                     "日期": "date",
@@ -51,9 +62,10 @@ def get_stock_daily(code: str):
 
 
 def get_market_index():
-    if ak is not None:
+    ak_module = get_akshare()
+    if ak_module is not None:
         try:
-            df = ak.stock_zh_index_daily(symbol="sh000001")
+            df = ak_module.stock_zh_index_daily(symbol="sh000001")
             df["close"] = pd.to_numeric(df["close"], errors="coerce")
             return df.tail(60).dropna(subset=["close"])
         except Exception:
